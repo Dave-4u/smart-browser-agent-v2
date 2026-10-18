@@ -135,7 +135,23 @@ async function extractFromTab(tabId) {
       }
 
       const responseImgs = [img1, img2].filter(Boolean);
-      const responseUrls = responseImgs.map((img) => img.src).filter(Boolean);
+      // Convert images to data URLs in the page (avoids CORS/proxy issues in background)
+      const responseUrls = [];
+      for (const img of responseImgs) {
+        let dataUrl = null;
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth || img.width;
+          canvas.height = img.naturalHeight || img.height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0);
+          dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        } catch (e) {
+          // tainted canvas — fall back to src
+          dataUrl = img.src;
+        }
+        if (dataUrl) responseUrls.push(dataUrl);
+      }
 
       const sourceImgs = Array.from(
         document.querySelectorAll(
