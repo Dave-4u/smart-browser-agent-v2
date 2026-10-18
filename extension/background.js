@@ -45,7 +45,13 @@ async function getPastLessons() {
 
 async function urlToBase64(url) {
   try {
-    const res = await fetch(url);
+    // Already a data URL from the page
+    if (url && url.startsWith("data:")) {
+      const parts = url.split(",");
+      return parts.length > 1 ? parts[1] : null;
+    }
+    const res = await fetch(url, { mode: "cors", credentials: "omit" });
+    if (!res.ok) return null;
     const blob = await res.blob();
     return new Promise((resolve) => {
       const reader = new FileReader();
@@ -226,18 +232,17 @@ async function askGemini(prompt, imageDescriptions, responseUrls = [], feedback 
     }
   };
 
-  // Try models in order; retry on 503 (high demand)
+  // Prefer high-volume lite models first (less 503), then fall back
   const models = [
-    "gemini-3.8-flash",
-    "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.8-flash",
     "gemini-2.5-flash"
   ];
 
   let lastError = null;
   for (const model of models) {
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const res = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
@@ -249,33 +254,38 @@ async function askGemini(prompt, imageDescriptions, responseUrls = [], feedback 
         );
 
         if (res.status === 503 || res.status === 429) {
-          lastError = `Gemini ${model} busy (${res.status}).`;
-          await new Promise((r) => setTimeout(r, attempt * 1000));
+          lastError = `Gemini ${model} busy (${res.status})`;
+          await new Promise((r) => setTimeout(r, 800 * attempt));
           continue;
         }
 
         if (!res.ok) {
           const errText = await res.text();
           if (res.status === 404) {
-            lastError = `Model ${model} not found.`;
+            lastError = `Model ${model} not found`;
             break;
           }
-          throw new Error(`Gemini error ${res.status}: ${errText}`);
+          lastError = `Gemini error ${res.status}: ${errText}`;
+          break;
         }
 
         const data = await res.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        return text || "No response from Gemini.";
+        const out = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!out) {
+          lastError = "Empty response from " + model;
+          continue;
+        }
+        return out;
       } catch (e) {
         lastError = e.message || String(e);
-        if (String(lastError).includes("404") || String(lastError).includes("not found")) break;
-        await new Promise((r) => setTimeout(r, attempt * 1000));
+        if (String(lastError).includes("404")) break;
+        await new Promise((r) => setTimeout(r, 800 * attempt));
       }
     }
   }
 
   throw new Error(
     (lastError || "All Gemini models unavailable.") +
-      " Wait a minute and click Analyze again."
+      " — wait ~30s and click Analyze again."
   );
 }
