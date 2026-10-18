@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Smart Labeling Assistant v2",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "description": "Assists with image preference labeling (A vs B) using Gemini vision. Updated Toloka/Mindrift rules: quality first, then prompt adherence, beauty effects, UI edge cases. Never auto-submits.",
   "permissions": [
     "sidePanel",
