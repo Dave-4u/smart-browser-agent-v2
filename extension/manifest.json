@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Smart Labeling Assistant v2",
+  "version": "2.0.0",
+  "description": "Assists with image preference labeling (A vs B) using Gemini vision. Updated Toloka/Mindrift rules: quality first, then prompt adherence, beauty effects, UI edge cases. Never auto-submits.",
+  "permissions": [
+    "sidePanel",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "https://generativelanguage.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Open Labeling Assistant v2"
+  }
+}
