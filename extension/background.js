@@ -226,8 +226,8 @@ async function askGemini(prompt, imageDescriptions, responseUrls = [], feedback 
     }
   };
 
-  // Same family as the original extension (vision-capable Gemini)
-  const model = "gemini-2.0-flash";
+  // Gemini vision model (updated 2026)
+  const model = "gemini-3.8-flash";
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
     {
