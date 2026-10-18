@@ -58,18 +58,46 @@ async function runAnalysis(feedback = "") {
   }
 }
 
+/** Ensure content script is present; inject it if the page was open before the extension loaded */
+async function ensureContentScript(tabId) {
+  try {
+    // Ping existing content script
+    await chrome.tabs.sendMessage(tabId, { type: "PING" });
+    return; // already there
+  } catch {
+    // Not injected — inject now
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"]
+    });
+    // Small wait so the listener is registered
+    await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
+async function extractFromTab(tabId) {
+  await ensureContentScript(tabId);
+  return chrome.tabs.sendMessage(tabId, { type: "EXTRACT_PAGE" });
+}
+
 analyzeBtn.addEventListener("click", async () => {
   extractedDiv.textContent = "Extracting…";
   resultDiv.textContent = "";
   feedbackBox.value = "";
+  statusDiv.textContent = "";
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error("No active tab");
 
-    lastPageData = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_PAGE" });
+    // Cannot inject into chrome:// or edge:// pages
+    if (tab.url && (tab.url.startsWith("chrome://") || tab.url.startsWith("edge://") || tab.url.startsWith("about:"))) {
+      throw new Error("Open the labeling website first, then click Analyze.");
+    }
 
-    if (lastPageData.error) {
+    lastPageData = await extractFromTab(tab.id);
+
+    if (lastPageData?.error) {
       throw new Error(lastPageData.error);
     }
 
@@ -82,7 +110,7 @@ analyzeBtn.addEventListener("click", async () => {
 
     if (urlCount < 2) {
       statusDiv.innerHTML =
-        '<span class="warning">Fewer than 2 response images found. Open a task that shows Generated image 1 and 2.</span>';
+        '<span class="warning">Fewer than 2 response images found. Make sure Generated image 1 and 2 are visible on the page.</span>';
       return;
     }
 
@@ -90,7 +118,7 @@ analyzeBtn.addEventListener("click", async () => {
   } catch (err) {
     resultDiv.textContent = "Error: " + err.message;
     statusDiv.innerHTML =
-      '<span class="warning">Make sure you are on the labeling page and the content script is loaded (refresh the page).</span>';
+      '<span class="warning">If this keeps happening: go to chrome://extensions → Reload this extension → hard-refresh the labeling page (Ctrl+Shift+R) → try again.</span>';
   }
 });
 

@@ -124,6 +124,10 @@ async function extractLabelingData() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "PING") {
+    sendResponse({ ok: true });
+    return false;
+  }
   if (message.type === "EXTRACT_PAGE") {
     extractLabelingData()
       .then(sendResponse)
