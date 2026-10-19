@@ -1,137 +1,190 @@
-// Content script — extracts structured prompt + Generated image 1 / 2 URLs
-// Tuned for the Azure labeling tool (label-exhed...azurewebsites.net) and similar pages
+// Smart Labeling Assistant v3 — runs ON the labeling page
+// Floating button → extract → Gemini → show result in overlay
 
-async function extractLabelingData() {
-  // ---------- Prompt ----------
-  let prompt = "";
+(function () {
+  if (window.__smartLabelV3) return;
+  window.__smartLabelV3 = true;
 
-  // Prefer structured object blocks if present
-  const objectBlocks = document.querySelectorAll(
-    '[class*="prompt"], [class*="object-block"], [class*="attribute"], .prompt-text, .prompt-container'
-  );
-  if (objectBlocks.length) {
-    // Collect visible text that looks like the attribute list
-    const texts = [];
-    objectBlocks.forEach((el) => {
-      const t = (el.innerText || "").trim();
-      if (t.length > 8 && t.length < 2000) texts.push(t);
-    });
-    if (texts.length) {
-      // Deduplicate and join
-      prompt = [...new Set(texts)].join("\n\n");
-    }
-  }
-
-  // Fallback: look for "PROMPT" heading or the main instruction area
-  if (!prompt || prompt.length < 20) {
+  function extract() {
+    let prompt = "";
     const bodyText = document.body.innerText || "";
-    const match = bodyText.match(
-      /(?:PROMPT|Look at the images[\s\S]{0,80}?)\s*([\s\S]{30,2500}?)(?=Generated image|Submit|Optional Comment|$)/i
+
+    const m = bodyText.match(
+      /Look at the images[\s\S]{0,120}?([\s\S]{20,3000}?)(?=Generated image\s*1|Submit|Optional Comment)/i
     );
-    if (match) {
-      prompt = match[1].trim();
-    } else {
-      // Last resort: grab text near the top content area
-      const main = document.querySelector("main") || document.body;
-      prompt = (main.innerText || "").slice(0, 1800).trim() || "(prompt not found)";
+    if (m) prompt = m[1].trim();
+    if (!prompt || prompt.length < 15) {
+      const blocks = [];
+      document.querySelectorAll("strong, b, h3, h4, [class*='title']").forEach((el) => {
+        const t = (el.innerText || "").trim();
+        if (t.length > 2 && t.length < 80 && t === t.toUpperCase()) {
+          const parent = el.parentElement;
+          if (parent) blocks.push(parent.innerText.trim().slice(0, 300));
+        }
+      });
+      if (blocks.length) prompt = [...new Set(blocks)].join("\n");
     }
+    if (!prompt || prompt.length < 15) {
+      prompt = bodyText.slice(0, 1500);
+    }
+    prompt = prompt
+      .replace(/You have completed[\s\S]*?expires[\s\S]*?\./gi, "")
+      .replace(/Image Wiki|Instructions|FAQ|How to evaluate/gi, "")
+      .trim();
+
+    const img1 =
+      document.querySelector('img[alt="Generated image 1"]') ||
+      document.querySelector('img[alt="image_1"]');
+    const img2 =
+      document.querySelector('img[alt="Generated image 2"]') ||
+      document.querySelector('img[alt="image_2"]');
+
+    let imgs = [img1, img2].filter(Boolean);
+    if (imgs.length < 2) {
+      imgs = Array.from(document.querySelectorAll("img")).filter(
+        (i) => i.naturalWidth > 200 && !(i.alt || "").toLowerCase().includes("full-size")
+      ).slice(0, 2);
+    }
+
+    const urls = imgs.map((i) => i.src).filter(Boolean);
+    return { prompt, urls, count: urls.length };
   }
 
-  // Clean common chrome
-  prompt = prompt
-    .replace(/You have completed[\s\S]*?task expires[\s\S]*?\./gi, "")
-    .replace(/Look at the images and quality first[\s\S]*?How to evaluate[\s\S]*?/gi, "")
-    .replace(/Image Wiki|Instructions|FAQ/gi, "")
-    .trim();
+  function ensureUI() {
+    if (document.getElementById("sla-root")) return;
 
-  // ---------- Response images (the two we choose between) ----------
-  let img1 =
-    document.querySelector('img[alt="Generated image 1"]') ||
-    document.querySelector('img[alt="image_1"]') ||
-    document.querySelector('img[alt*="Generated image 1" i]');
-  let img2 =
-    document.querySelector('img[alt="Generated image 2"]') ||
-    document.querySelector('img[alt="image_2"]') ||
-    document.querySelector('img[alt*="Generated image 2" i]');
+    const root = document.createElement("div");
+    root.id = "sla-root";
+    root.innerHTML = `
+      <style>
+        #sla-root { all: initial; font-family: system-ui, sans-serif; }
+        #sla-btn {
+          position: fixed; bottom: 24px; right: 24px; z-index: 2147483646;
+          background: #2563eb; color: #fff; border: none; border-radius: 999px;
+          padding: 14px 20px; font-size: 14px; font-weight: 600; cursor: pointer;
+          box-shadow: 0 4px 20px rgba(0,0,0,.35);
+        }
+        #sla-btn:hover { background: #1d4ed8; }
+        #sla-btn:disabled { background: #64748b; cursor: wait; }
+        #sla-panel {
+          position: fixed; bottom: 80px; right: 24px; width: 360px; max-height: 70vh;
+          z-index: 2147483646; background: #111827; color: #e5e7eb;
+          border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.45);
+          display: none; flex-direction: column; overflow: hidden;
+        }
+        #sla-panel.open { display: flex; }
+        #sla-panel header {
+          padding: 12px 14px; background: #1f2937; font-weight: 600; font-size: 13px;
+          display: flex; justify-content: space-between; align-items: center;
+        }
+        #sla-panel header button {
+          background: transparent; border: none; color: #9ca3af; cursor: pointer; font-size: 18px;
+        }
+        #sla-body { padding: 12px 14px; overflow-y: auto; font-size: 13px; line-height: 1.45; }
+        #sla-key {
+          width: 100%; box-sizing: border-box; background: #0f172a; color: #e5e7eb;
+          border: 1px solid #334155; border-radius: 8px; padding: 8px; margin: 8px 0;
+        }
+        #sla-result {
+          white-space: pre-wrap; background: #0f172a; border-radius: 8px;
+          padding: 10px; margin-top: 10px; border-left: 3px solid #3b82f6;
+          min-height: 40px;
+        }
+        #sla-status { color: #94a3b8; font-size: 12px; margin-top: 8px; }
+        #sla-save {
+          background: #374151; color: #fff; border: none; border-radius: 6px;
+          padding: 6px 10px; cursor: pointer; font-size: 12px;
+        }
+      </style>
+      <button id="sla-btn" type="button">Analyze A/B</button>
+      <div id="sla-panel">
+        <header>
+          <span>Smart Labeling v3</span>
+          <button id="sla-close" type="button" title="Close">×</button>
+        </header>
+        <div id="sla-body">
+          <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;">Gemini API key</div>
+          <input id="sla-key" type="password" placeholder="Paste key from aistudio.google.com" />
+          <button id="sla-save" type="button">Save key</button>
+          <div id="sla-result">Click Analyze A/B on a task that shows Generated image 1 and 2.</div>
+          <div id="sla-status"></div>
+        </div>
+      </div>
+    `;
+    document.documentElement.appendChild(root);
 
-  // Fallback by radio labels / nearby structure
-  if (!img1 || !img2) {
-    const wrappers = document.querySelectorAll(".image-wrapper, [class*='image-card'], [class*='response']");
-    const candidates = [];
-    wrappers.forEach((w) => {
-      const img = w.querySelector("img");
-      if (img && img.naturalWidth > 80) candidates.push(img);
+    const btn = document.getElementById("sla-btn");
+    const panel = document.getElementById("sla-panel");
+    const close = document.getElementById("sla-close");
+    const keyInput = document.getElementById("sla-key");
+    const saveBtn = document.getElementById("sla-save");
+    const result = document.getElementById("sla-result");
+    const status = document.getElementById("sla-status");
+
+    chrome.storage.local.get("geminiApiKey").then(({ geminiApiKey }) => {
+      if (geminiApiKey) keyInput.value = geminiApiKey;
     });
-    if (candidates.length >= 2) {
-      img1 = img1 || candidates[0];
-      img2 = img2 || candidates[1];
-    }
+
+    saveBtn.onclick = () => {
+      const key = keyInput.value.trim();
+      if (!key) {
+        status.textContent = "Paste a key first.";
+        return;
+      }
+      chrome.storage.local.set({ geminiApiKey: key });
+      status.textContent = "Key saved.";
+    };
+
+    close.onclick = () => panel.classList.remove("open");
+
+    btn.onclick = async () => {
+      panel.classList.add("open");
+      btn.disabled = true;
+      btn.textContent = "Working…";
+      result.textContent = "Extracting from this page…";
+      status.textContent = "";
+
+      try {
+        const data = extract();
+        if (data.count < 2) {
+          result.textContent =
+            "Found " + data.count + " image(s).\n\nOpen a real task where BOTH Generated image 1 and Generated image 2 are visible, then click again.";
+          status.textContent = "No pair to compare yet.";
+          return;
+        }
+
+        result.textContent =
+          "Images: " + data.count + "\nPrompt preview:\n" + (data.prompt || "").slice(0, 400) + "\n\nAsking Gemini…";
+
+        const response = await chrome.runtime.sendMessage({
+          type: "ANALYZE",
+          prompt: data.prompt,
+          urls: data.urls
+        });
+
+        if (!response || !response.success) {
+          throw new Error((response && response.error) || "No response from background");
+        }
+        result.textContent = response.result;
+        status.textContent = "You decide which radio to select — extension never submits.";
+      } catch (err) {
+        result.textContent = "Error: " + err.message;
+        status.textContent = "Check API key and that images are loaded.";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Analyze A/B";
+      }
+    };
   }
 
-  // Final fallback: any large images that are not icons
-  if (!img1 || !img2) {
-    const large = Array.from(document.querySelectorAll("img")).filter(
-      (img) => img.naturalWidth > 200 && !img.alt?.toLowerCase().includes("full-size")
-    );
-    if (large.length >= 2) {
-      img1 = img1 || large[0];
-      img2 = img2 || large[1];
-    }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ensureUI);
+  } else {
+    ensureUI();
   }
 
-  const responseImgs = [img1, img2].filter(Boolean);
-  const responseUrls = responseImgs.map((img) => img.src).filter(Boolean);
-
-  // ---------- Optional source / request images (context only) ----------
-  const sourceImgs = Array.from(
-    document.querySelectorAll(
-      'img[alt^="source_image"], img[alt="Request Image"], img[alt*="source" i]'
-    )
-  ).filter((img) => img.naturalWidth > 50);
-
-  let imageDescriptions = "";
-  if (sourceImgs.length) {
-    imageDescriptions += "SOURCE / REQUEST IMAGES (context only — do not choose these):\n";
-    imageDescriptions += sourceImgs
-      .map(
-        (img, i) =>
-          `Source ${i + 1}: alt="${img.alt || ""}" size=${img.naturalWidth}x${img.naturalHeight}`
-      )
-      .join("\n");
-    imageDescriptions += "\n\n";
-  }
-
-  imageDescriptions += "RESPONSE IMAGES (choose the better one):\n";
-  imageDescriptions += responseImgs
-    .map(
-      (img, i) =>
-        `Image ${i + 1} (\"Generated image ${i + 1}\"): alt="${img.alt || ""}" size=${img.naturalWidth}x${img.naturalHeight}`
-    )
-    .join("\n");
-
-  // Radio buttons for reference
-  const radios = Array.from(document.querySelectorAll('input[type="radio"][name="selected_image"]')).map(
-    (r) => ({ value: r.value, checked: r.checked })
-  );
-
-  return {
-    prompt,
-    imageDescriptions,
-    responseUrls,
-    radios,
-    note: "You MUST choose Image 1 or Image 2 (Generated image 1 / Generated image 2). Source images are context only."
-  };
-}
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "PING") {
-    sendResponse({ ok: true });
-    return false;
-  }
-  if (message.type === "EXTRACT_PAGE") {
-    extractLabelingData()
-      .then(sendResponse)
-      .catch((err) => sendResponse({ error: err.message }));
-    return true;
-  }
-});
+  const obs = new MutationObserver(() => {
+    if (!document.getElementById("sla-btn")) ensureUI();
+  });
+  obs.observe(document.documentElement, { childList: true, subtree: true });
+})();
