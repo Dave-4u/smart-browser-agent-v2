@@ -20,13 +20,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function saveCorrection(feedback, prompt, previousAnswer) {
-  const { corrections = [] } = await chrome.storage.local.get("corrections");
-  corrections.push({
+  const data = await chrome.storage.local.get("corrections");
+  const corrections = Array.isArray(data.corrections) ? data.corrections : [];
+  const entry = {
     feedback: feedback || "",
     promptSnippet: (prompt || "").slice(0, 180),
     previousAnswer: (previousAnswer || "").slice(0, 120),
     timestamp: Date.now()
-  });
+  };
+  const last = corrections[corrections.length - 1];
+  if (last && last.feedback === entry.feedback && last.promptSnippet === entry.promptSnippet) {
+    return;
+  }
+  corrections.push(entry);
   await chrome.storage.local.set({ corrections: corrections.slice(-40) });
 }
 
