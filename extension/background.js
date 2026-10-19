@@ -1,9 +1,15 @@
-// Background — Gemini call only (extraction happens in content script)
+// Background — Gemini + correction memory
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "ANALYZE") {
-    analyze(message.prompt, message.urls)
+    analyze(message.prompt, message.urls, message.feedback || "")
       .then((result) => sendResponse({ success: true, result }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+  if (message.type === "SAVE_CORRECTION") {
+    saveCorrection(message.feedback, message.prompt, message.previousAnswer)
+      .then(() => sendResponse({ success: true }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
@@ -12,6 +18,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 });
+
+async function saveCorrection(feedback, prompt, previousAnswer) {
+  const { corrections = [] } = await chrome.storage.local.get("corrections");
+  corrections.push({
+    feedback: feedback || "",
+    promptSnippet: (prompt || "").slice(0, 180),
+    previousAnswer: (previousAnswer || "").slice(0, 120),
+    timestamp: Date.now()
+  });
+  await chrome.storage.local.set({ corrections: corrections.slice(-40) });
+}
+
+async function getPastLessons() {
+  const { corrections = [] } = await chrome.storage.local.get("corrections");
+  if (!corrections.length) return "";
+  return corrections
+    .slice(-12)
+    .map((c, i) => (i + 1) + ". " + c.feedback)
+    .join("\n");
+}
 
 async function urlToBase64(url) {
   try {
@@ -54,10 +80,10 @@ OUTPUT:
 - Brief concrete reasons (defects + key prompt items).
 - Do not tell the user to submit.`;
 
-async function analyze(prompt, urls) {
+async function analyze(prompt, urls, feedback) {
   const { geminiApiKey } = await chrome.storage.local.get("geminiApiKey");
   if (!geminiApiKey) {
-    throw new Error("Save a Gemini API key first (button panel). Free key: aistudio.google.com");
+    throw new Error("Save a Gemini API key first (panel). Free key: aistudio.google.com");
   }
 
   const imageParts = [];
@@ -68,17 +94,35 @@ async function analyze(prompt, urls) {
     }
   }
   if (imageParts.length < 2) {
-    throw new Error("Could not load both images (" + imageParts.length + "/2). Wait for images to finish loading.");
+    throw new Error(
+      "Could not load both images (" + imageParts.length + "/2). Wait for images to finish loading."
+    );
   }
 
-  const userText =
+  const pastLessons = await getPastLessons();
+  let system = SYSTEM;
+  if (pastLessons) {
+    system +=
+      "\n\nPAST CORRECTIONS FROM THE USER (apply these lessons strictly on similar cases):\n" +
+      pastLessons;
+  }
+
+  let userText =
     "PROMPT:\n" +
     (prompt || "(none)") +
     "\n\nImage 1 = first attachment, Image 2 = second attachment.\nWhich is better and why?";
 
+  if (feedback) {
+    userText =
+      "IMPORTANT CORRECTION FROM THE USER:\n" +
+      feedback +
+      "\n\nRe-examine both images with this correction and the labeling rules. Prefer the image that matches the correction.\n\n" +
+      userText;
+  }
+
   const body = {
     contents: [{ role: "user", parts: [{ text: userText }, ...imageParts] }],
-    systemInstruction: { parts: [{ text: SYSTEM }] },
+    systemInstruction: { parts: [{ text: system }] },
     generationConfig: { temperature: 0.2 }
   };
 
@@ -119,8 +163,12 @@ async function analyze(prompt, urls) {
           break;
         }
         const data = await res.json();
-        const text = data.candidates && data.candidates[0] && data.candidates[0].content &&
-          data.candidates[0].content.parts && data.candidates[0].content.parts[0] &&
+        const text =
+          data.candidates &&
+          data.candidates[0] &&
+          data.candidates[0].content &&
+          data.candidates[0].content.parts &&
+          data.candidates[0].content.parts[0] &&
           data.candidates[0].content.parts[0].text;
         if (text) return text;
         lastError = "Empty response from " + model;
