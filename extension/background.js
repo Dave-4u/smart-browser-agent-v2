@@ -40,7 +40,7 @@ async function getPastLessons() {
   const { corrections = [] } = await chrome.storage.local.get("corrections");
   if (!corrections.length) return "";
   return corrections
-    .slice(-12)
+    .slice(-20)
     .map((c, i) => (i + 1) + ". " + c.feedback)
     .join("\n");
 }
@@ -119,11 +119,16 @@ async function analyze(prompt, urls, feedback, refUrls) {
   let system = SYSTEM;
   if (pastLessons) {
     system +=
-      "\n\nPAST CORRECTIONS FROM THE USER (apply these lessons strictly on similar cases):\n" +
-      pastLessons;
+      "\n\n=== MANDATORY USER CORRECTIONS (HIGHEST PRIORITY) ===\n" +
+      "These are binding rules from the human labeler. If a case is similar, you MUST follow the human's choice. Do not contradict them.\n" +
+      pastLessons +
+      "\n=== END CORRECTIONS ===";
   }
 
-  let userText = "PROMPT:\n" + (prompt || "(none)") + "\n\n";
+  let userText =
+    "PROMPT:\n" +
+    (prompt || "(none)") +
+    "\n\n";
   if (refLoaded > 0) {
     userText +=
       "The first " + refLoaded + " attached image(s) are REFERENCE / style hints only (not choices).\n";
@@ -132,18 +137,24 @@ async function analyze(prompt, urls, feedback, refUrls) {
     "The last two attached images are the candidates: Image 1 then Image 2.\n" +
     "Choose which response is better and why.";
 
+  if (pastLessons && !feedback) {
+    userText +=
+      "\n\nApply MANDATORY USER CORRECTIONS. If this task matches a past correction, pick the same image the human chose.";
+  }
+
   if (feedback) {
     userText =
-      "IMPORTANT CORRECTION FROM THE USER:\n" +
+      "CRITICAL OVERRIDE FROM THE USER (must obey):\n" +
       feedback +
-      "\n\nRe-examine both response images with this correction and the labeling rules. Prefer the image that matches the correction.\n\n" +
+      "\n\nYou MUST start your answer with the image the user said is correct. " +
+      "Explain briefly using quality/prompt rules in support of that choice.\n\n" +
       userText;
   }
 
   const body = {
     contents: [{ role: "user", parts: [{ text: userText }, ...imageParts] }],
     systemInstruction: { parts: [{ text: system }] },
-    generationConfig: { temperature: 0.2 }
+    generationConfig: { temperature: 0.15 }
   };
 
   const models = [
