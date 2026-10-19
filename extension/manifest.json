@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Smart Labeling Assistant v2",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "One-click image A/B labeling helper. Floating button on the task page. Uses Gemini vision.",
   "permissions": ["storage"],
   "host_permissions": [
