@@ -1,36 +1,26 @@
-// Smart Labeling Assistant v3.2 — tuned for azure label tool (regular_v4 + references)
+// Smart Labeling Assistant v3.2.1 — regular_v4 + reliable correction save
 
 (function () {
-  if (window.__smartLabelV32) return;
-  window.__smartLabelV32 = true;
+  if (window.__smartLabelV321) return;
+  window.__smartLabelV321 = true;
 
   function extract() {
     let prompt = "";
-
     const promptSide = document.querySelector(".prompt-side, .prompt-hints-wrapper");
-    if (promptSide) {
-      prompt = (promptSide.innerText || "").trim();
-    }
+    if (promptSide) prompt = (promptSide.innerText || "").trim();
 
     if (!prompt || prompt.length < 10) {
       const anchors = Array.from(document.querySelectorAll(".prompt-anchor, [class*='prompt']"));
-      const texts = anchors
-        .map((el) => (el.innerText || "").trim())
-        .filter((t) => t.length > 5 && t.length < 800);
+      const texts = anchors.map((el) => (el.innerText || "").trim()).filter((t) => t.length > 5 && t.length < 800);
       if (texts.length) prompt = [...new Set(texts)].join("\n");
     }
 
     if (!prompt || prompt.length < 10) {
       const bodyText = document.body.innerText || "";
-      const m = bodyText.match(
-        /Look at the images[\s\S]{0,120}?([\s\S]{15,2500}?)(?=Generated image\s*1|Submit|Optional Comment)/i
-      );
+      const m = bodyText.match(/Look at the images[\s\S]{0,120}?([\s\S]{15,2500}?)(?=Generated image\s*1|Submit|Optional Comment)/i);
       if (m) prompt = m[1].trim();
     }
-
-    if (!prompt || prompt.length < 10) {
-      prompt = (document.body.innerText || "").slice(0, 1200);
-    }
+    if (!prompt || prompt.length < 10) prompt = (document.body.innerText || "").slice(0, 1200);
 
     prompt = prompt
       .replace(/You have completed[\s\S]*?expires[\s\S]*?\./gi, "")
@@ -38,19 +28,12 @@
       .replace(/Training stage[\s\S]*?task \d+ of \d+\.?/gi, "")
       .trim();
 
-    let img1 =
-      document.querySelector('img[alt="Generated image 1"]') ||
-      document.querySelector('img[alt="image_1"]');
-    let img2 =
-      document.querySelector('img[alt="Generated image 2"]') ||
-      document.querySelector('img[alt="image_2"]');
+    let img1 = document.querySelector('img[alt="Generated image 1"]') || document.querySelector('img[alt="image_1"]');
+    let img2 = document.querySelector('img[alt="Generated image 2"]') || document.querySelector('img[alt="image_2"]');
 
     if (!img1 || !img2) {
-      const wrappers = Array.from(
-        document.querySelectorAll(".image-wrapper, [class*='image-card'], [class*='response']")
-      );
-      wrappers.forEach((w) => {
-        const label = (w.innerText || (w.parentElement && w.parentElement.innerText) || "").slice(0, 80);
+      Array.from(document.querySelectorAll(".image-wrapper, [class*='image-card']")).forEach((w) => {
+        const label = (w.innerText || "").slice(0, 80);
         const img = w.querySelector("img");
         if (!img || img.naturalWidth < 80) return;
         if (/Generated image 1|image\s*1/i.test(label) && !img1) img1 = img;
@@ -58,24 +41,15 @@
       });
     }
 
-    const responseImgs = [img1, img2].filter(Boolean);
-    const responseUrls = responseImgs.map((i) => i.src).filter(Boolean);
+    const responseUrls = [img1, img2].filter(Boolean).map((i) => i.src).filter(Boolean);
+    const refUrls = Array.from(
+      document.querySelectorAll('img[alt="Contextual hint reference image"], img[alt*="reference" i], img[alt*="source" i]')
+    )
+      .filter((i) => i.naturalWidth > 40 && i.src)
+      .slice(0, 4)
+      .map((i) => i.src);
 
-    const refImgs = Array.from(
-      document.querySelectorAll(
-        'img[alt="Contextual hint reference image"], img[alt*="reference" i], img[alt*="source" i], img[alt*="Request" i]'
-      )
-    ).filter((i) => i.naturalWidth > 40 && i.src);
-
-    const refUrls = refImgs.slice(0, 4).map((i) => i.src);
-
-    return {
-      prompt,
-      urls: responseUrls,
-      count: responseUrls.length,
-      refUrls,
-      refCount: refUrls.length
-    };
+    return { prompt, urls: responseUrls, count: responseUrls.length, refUrls, refCount: refUrls.length };
   }
 
   function ensureUI() {
@@ -105,9 +79,7 @@
           padding: 12px 14px; background: #1f2937; font-weight: 600; font-size: 13px;
           display: flex; justify-content: space-between; align-items: center;
         }
-        #sla-panel header button {
-          background: transparent; border: none; color: #9ca3af; cursor: pointer; font-size: 18px;
-        }
+        #sla-panel header button { background: transparent; border: none; color: #9ca3af; cursor: pointer; font-size: 18px; }
         #sla-body { padding: 12px 14px; overflow-y: auto; font-size: 13px; line-height: 1.45; }
         #sla-key {
           width: 100%; box-sizing: border-box; background: #0f172a; color: #e5e7eb;
@@ -118,10 +90,7 @@
           padding: 10px; margin-top: 10px; border-left: 3px solid #3b82f6; min-height: 40px;
         }
         #sla-status { color: #94a3b8; font-size: 12px; margin-top: 8px; }
-        #sla-save {
-          background: #374151; color: #fff; border: none; border-radius: 6px;
-          padding: 6px 10px; cursor: pointer; font-size: 12px;
-        }
+        #sla-save { background: #374151; color: #fff; border: none; border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
         #sla-feedback-box { display: none; margin-top: 12px; padding-top: 10px; border-top: 1px solid #334155; }
         #sla-feedback-box.show { display: block; }
         #sla-feedback {
@@ -144,7 +113,7 @@
       <div id="sla-panel">
         <header>
           <span>Smart Labeling v3.2</span>
-          <button id="sla-close" type="button" title="Close">×</button>
+          <button id="sla-close" type="button">×</button>
         </header>
         <div id="sla-body">
           <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;">Gemini API key</div>
@@ -166,7 +135,6 @@
 
     const btn = document.getElementById("sla-btn");
     const panel = document.getElementById("sla-panel");
-    const close = document.getElementById("sla-close");
     const keyInput = document.getElementById("sla-key");
     const saveBtn = document.getElementById("sla-save");
     const result = document.getElementById("sla-result");
@@ -179,8 +147,10 @@
     let lastResult = "";
     let chosenPick = null;
 
-    chrome.storage.local.get("geminiApiKey").then(({ geminiApiKey }) => {
-      if (geminiApiKey) keyInput.value = geminiApiKey;
+    chrome.storage.local.get(["geminiApiKey", "corrections"]).then((data) => {
+      if (data.geminiApiKey) keyInput.value = data.geminiApiKey;
+      const n = (data.corrections || []).length;
+      if (n) status.textContent = n + " correction(s) already stored.";
     });
 
     saveBtn.onclick = () => {
@@ -190,7 +160,7 @@
       status.textContent = "Key saved.";
     };
 
-    close.onclick = () => panel.classList.remove("open");
+    document.getElementById("sla-close").onclick = () => panel.classList.remove("open");
 
     document.querySelectorAll(".sla-choice").forEach((el) => {
       el.onclick = () => {
@@ -211,9 +181,7 @@
         lastData = data;
 
         if (data.count < 2) {
-          result.textContent =
-            "Found " + data.count +
-            " response image(s).\n\nWait until Generated image 1 and 2 are both visible, then try again.";
+          result.textContent = "Found " + data.count + " response image(s). Wait until both Generated image 1 and 2 are visible.";
           status.textContent = "Need both generated images.";
           feedbackBox.classList.remove("show");
           return;
@@ -241,14 +209,14 @@
 
         lastResult = response.result;
         result.textContent = response.result;
-        status.textContent = "You pick the radio. Use correction box if this was wrong.";
+        status.textContent = "You pick the radio. Use correction box if wrong.";
         feedbackBox.classList.add("show");
         chosenPick = null;
         document.querySelectorAll(".sla-choice").forEach((c) => c.classList.remove("active"));
         feedbackTa.value = "";
       } catch (err) {
         result.textContent = "Error: " + err.message;
-        status.textContent = "Check API key and that images finished loading.";
+        status.textContent = "Check API key and image load.";
         feedbackBox.classList.remove("show");
       } finally {
         btn.disabled = false;
@@ -266,7 +234,10 @@
         status.textContent = "Select Image 1 or 2, or write why it was wrong.";
         return;
       }
-      if (!lastData) { status.textContent = "Run Analyze first."; return; }
+      if (!lastData) {
+        status.textContent = "Run Analyze first.";
+        return;
+      }
 
       let note = feedbackTa.value.trim();
       if (chosenPick) {
@@ -276,16 +247,32 @@
           (note ? " Reason: " + note : "");
       }
 
-      await chrome.runtime.sendMessage({
-        type: "SAVE_CORRECTION",
+      // Save directly in this page (does not depend on service worker)
+      const store = await chrome.storage.local.get("corrections");
+      const list = Array.isArray(store.corrections) ? store.corrections.slice() : [];
+      list.push({
         feedback: note,
-        prompt: lastData.prompt || "",
-        previousAnswer: lastResult || ""
+        promptSnippet: (lastData.prompt || "").slice(0, 180),
+        previousAnswer: (lastResult || "").slice(0, 120),
+        timestamp: Date.now()
       });
+      const trimmed = list.slice(-40);
+      await chrome.storage.local.set({ corrections: trimmed });
 
-      status.textContent = "Correction saved. Re-analyzing…";
+      try {
+        await chrome.runtime.sendMessage({
+          type: "SAVE_CORRECTION",
+          feedback: note,
+          prompt: lastData.prompt || "",
+          previousAnswer: lastResult || ""
+        });
+      } catch (e) {}
+
+      const verify = await chrome.storage.local.get("corrections");
+      const n = (verify.corrections || []).length;
+      status.textContent = "Saved (" + n + " lessons). Re-analyzing…";
       await runAnalyze(note);
-      status.textContent = "Correction saved — will apply on future tasks.";
+      status.textContent = "Correction saved (" + n + " total). Used on future tasks.";
     };
   }
 
