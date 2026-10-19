@@ -1,56 +1,81 @@
-// Smart Labeling Assistant v3.1 — in-page button + correction memory
+// Smart Labeling Assistant v3.2 — tuned for azure label tool (regular_v4 + references)
 
 (function () {
-  if (window.__smartLabelV3) return;
-  window.__smartLabelV3 = true;
+  if (window.__smartLabelV32) return;
+  window.__smartLabelV32 = true;
 
   function extract() {
     let prompt = "";
-    const bodyText = document.body.innerText || "";
 
-    const m = bodyText.match(
-      /Look at the images[\s\S]{0,120}?([\s\S]{20,3000}?)(?=Generated image\s*1|Submit|Optional Comment)/i
-    );
-    if (m) prompt = m[1].trim();
-    if (!prompt || prompt.length < 15) {
-      const blocks = [];
-      document.querySelectorAll("strong, b, h3, h4, [class*='title']").forEach((el) => {
-        const t = (el.innerText || "").trim();
-        if (t.length > 2 && t.length < 80 && t === t.toUpperCase()) {
-          const parent = el.parentElement;
-          if (parent) blocks.push(parent.innerText.trim().slice(0, 300));
-        }
-      });
-      if (blocks.length) prompt = [...new Set(blocks)].join("\n");
+    const promptSide = document.querySelector(".prompt-side, .prompt-hints-wrapper");
+    if (promptSide) {
+      prompt = (promptSide.innerText || "").trim();
     }
-    if (!prompt || prompt.length < 15) {
-      prompt = bodyText.slice(0, 1500);
+
+    if (!prompt || prompt.length < 10) {
+      const anchors = Array.from(document.querySelectorAll(".prompt-anchor, [class*='prompt']"));
+      const texts = anchors
+        .map((el) => (el.innerText || "").trim())
+        .filter((t) => t.length > 5 && t.length < 800);
+      if (texts.length) prompt = [...new Set(texts)].join("\n");
     }
+
+    if (!prompt || prompt.length < 10) {
+      const bodyText = document.body.innerText || "";
+      const m = bodyText.match(
+        /Look at the images[\s\S]{0,120}?([\s\S]{15,2500}?)(?=Generated image\s*1|Submit|Optional Comment)/i
+      );
+      if (m) prompt = m[1].trim();
+    }
+
+    if (!prompt || prompt.length < 10) {
+      prompt = (document.body.innerText || "").slice(0, 1200);
+    }
+
     prompt = prompt
       .replace(/You have completed[\s\S]*?expires[\s\S]*?\./gi, "")
       .replace(/Image Wiki|Instructions|FAQ|How to evaluate/gi, "")
+      .replace(/Training stage[\s\S]*?task \d+ of \d+\.?/gi, "")
       .trim();
 
-    const img1 =
+    let img1 =
       document.querySelector('img[alt="Generated image 1"]') ||
       document.querySelector('img[alt="image_1"]');
-    const img2 =
+    let img2 =
       document.querySelector('img[alt="Generated image 2"]') ||
       document.querySelector('img[alt="image_2"]');
 
-    let imgs = [img1, img2].filter(Boolean);
-    if (imgs.length < 2) {
-      imgs = Array.from(document.querySelectorAll("img"))
-        .filter(
-          (i) =>
-            i.naturalWidth > 200 &&
-            !(i.alt || "").toLowerCase().includes("full-size")
-        )
-        .slice(0, 2);
+    if (!img1 || !img2) {
+      const wrappers = Array.from(
+        document.querySelectorAll(".image-wrapper, [class*='image-card'], [class*='response']")
+      );
+      wrappers.forEach((w) => {
+        const label = (w.innerText || (w.parentElement && w.parentElement.innerText) || "").slice(0, 80);
+        const img = w.querySelector("img");
+        if (!img || img.naturalWidth < 80) return;
+        if (/Generated image 1|image\s*1/i.test(label) && !img1) img1 = img;
+        if (/Generated image 2|image\s*2/i.test(label) && !img2) img2 = img;
+      });
     }
 
-    const urls = imgs.map((i) => i.src).filter(Boolean);
-    return { prompt, urls, count: urls.length };
+    const responseImgs = [img1, img2].filter(Boolean);
+    const responseUrls = responseImgs.map((i) => i.src).filter(Boolean);
+
+    const refImgs = Array.from(
+      document.querySelectorAll(
+        'img[alt="Contextual hint reference image"], img[alt*="reference" i], img[alt*="source" i], img[alt*="Request" i]'
+      )
+    ).filter((i) => i.naturalWidth > 40 && i.src);
+
+    const refUrls = refImgs.slice(0, 4).map((i) => i.src);
+
+    return {
+      prompt,
+      urls: responseUrls,
+      count: responseUrls.length,
+      refUrls,
+      refCount: refUrls.length
+    };
   }
 
   function ensureUI() {
@@ -90,15 +115,13 @@
         }
         #sla-result {
           white-space: pre-wrap; background: #0f172a; border-radius: 8px;
-          padding: 10px; margin-top: 10px; border-left: 3px solid #3b82f6;
-          min-height: 40px;
+          padding: 10px; margin-top: 10px; border-left: 3px solid #3b82f6; min-height: 40px;
         }
         #sla-status { color: #94a3b8; font-size: 12px; margin-top: 8px; }
-        #sla-save, #sla-correct-btn {
+        #sla-save {
           background: #374151; color: #fff; border: none; border-radius: 6px;
-          padding: 6px 10px; cursor: pointer; font-size: 12px; margin-right: 6px;
+          padding: 6px 10px; cursor: pointer; font-size: 12px;
         }
-        #sla-correct-btn { background: #b45309; }
         #sla-feedback-box { display: none; margin-top: 12px; padding-top: 10px; border-top: 1px solid #334155; }
         #sla-feedback-box.show { display: block; }
         #sla-feedback {
@@ -120,20 +143,20 @@
       <button id="sla-btn" type="button">Analyze A/B</button>
       <div id="sla-panel">
         <header>
-          <span>Smart Labeling v3</span>
+          <span>Smart Labeling v3.2</span>
           <button id="sla-close" type="button" title="Close">×</button>
         </header>
         <div id="sla-body">
           <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;">Gemini API key</div>
           <input id="sla-key" type="password" placeholder="Paste key from aistudio.google.com" />
           <button id="sla-save" type="button">Save key</button>
-          <div id="sla-result">Click Analyze A/B on a task with both generated images.</div>
+          <div id="sla-result">Open a task with Generated image 1 & 2, then click Analyze A/B.</div>
           <div id="sla-status"></div>
           <div id="sla-feedback-box">
-            <div style="font-size:11px;color:#fbbf24;margin-bottom:4px;">Was this wrong? Teach it for next time</div>
+            <div style="font-size:11px;color:#fbbf24;margin-bottom:4px;">Wrong? Teach it for next time</div>
             <span class="sla-choice" data-pick="Image 1">Correct is Image 1</span>
             <span class="sla-choice" data-pick="Image 2">Correct is Image 2</span>
-            <textarea id="sla-feedback" placeholder="Optional: why? e.g. Image 1 has extra fingers; Image 2 matches gold earring better"></textarea>
+            <textarea id="sla-feedback" placeholder="Optional: why was it wrong?"></textarea>
             <button id="sla-reanalyze" type="button">Save correction &amp; re-analyze</button>
           </div>
         </div>
@@ -162,10 +185,7 @@
 
     saveBtn.onclick = () => {
       const key = keyInput.value.trim();
-      if (!key) {
-        status.textContent = "Paste a key first.";
-        return;
-      }
+      if (!key) { status.textContent = "Paste a key first."; return; }
       chrome.storage.local.set({ geminiApiKey: key });
       status.textContent = "Key saved.";
     };
@@ -183,9 +203,7 @@
     async function runAnalyze(feedbackText) {
       btn.disabled = true;
       btn.textContent = "Working…";
-      result.textContent = feedbackText
-        ? "Re-analyzing with your correction…"
-        : "Extracting from this page…";
+      result.textContent = feedbackText ? "Re-analyzing with correction…" : "Extracting…";
       status.textContent = "";
 
       try {
@@ -194,20 +212,18 @@
 
         if (data.count < 2) {
           result.textContent =
-            "Found " +
-            data.count +
-            " image(s).\n\nOpen a task where BOTH Generated image 1 and 2 are visible.";
-          status.textContent = "No pair to compare.";
+            "Found " + data.count +
+            " response image(s).\n\nWait until Generated image 1 and 2 are both visible, then try again.";
+          status.textContent = "Need both generated images.";
           feedbackBox.classList.remove("show");
           return;
         }
 
         if (!feedbackText) {
           result.textContent =
-            "Images: " +
-            data.count +
-            "\nPrompt preview:\n" +
-            (data.prompt || "").slice(0, 350) +
+            "Response images: " + data.count +
+            "\nReference images: " + data.refCount +
+            "\nPrompt:\n" + (data.prompt || "").slice(0, 400) +
             "\n\nAsking Gemini…";
         }
 
@@ -215,6 +231,7 @@
           type: "ANALYZE",
           prompt: data.prompt,
           urls: data.urls,
+          refUrls: data.refUrls || [],
           feedback: feedbackText || ""
         });
 
@@ -224,14 +241,14 @@
 
         lastResult = response.result;
         result.textContent = response.result;
-        status.textContent = "You pick the radio. If this was wrong, use the correction box below.";
+        status.textContent = "You pick the radio. Use correction box if this was wrong.";
         feedbackBox.classList.add("show");
         chosenPick = null;
         document.querySelectorAll(".sla-choice").forEach((c) => c.classList.remove("active"));
         feedbackTa.value = "";
       } catch (err) {
         result.textContent = "Error: " + err.message;
-        status.textContent = "Check API key and that images are loaded.";
+        status.textContent = "Check API key and that images finished loading.";
         feedbackBox.classList.remove("show");
       } finally {
         btn.disabled = false;
@@ -249,16 +266,12 @@
         status.textContent = "Select Image 1 or 2, or write why it was wrong.";
         return;
       }
-      if (!lastData) {
-        status.textContent = "Run Analyze first.";
-        return;
-      }
+      if (!lastData) { status.textContent = "Run Analyze first."; return; }
 
       let note = feedbackTa.value.trim();
       if (chosenPick) {
         note =
-          "The correct choice is " +
-          chosenPick +
+          "The correct choice is " + chosenPick +
           ". Previous model answer was wrong." +
           (note ? " Reason: " + note : "");
       }
@@ -272,7 +285,7 @@
 
       status.textContent = "Correction saved. Re-analyzing…";
       await runAnalyze(note);
-      status.textContent = "Correction saved and applied. It will influence future tasks.";
+      status.textContent = "Correction saved — will apply on future tasks.";
     };
   }
 
