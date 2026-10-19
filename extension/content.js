@@ -1,8 +1,8 @@
-// Smart Labeling Assistant v3.2.1 — regular_v4 + reliable correction save
+// Smart Labeling Assistant v3.3 — separate Save vs Re-analyze + stronger lessons
 
 (function () {
-  if (window.__smartLabelV321) return;
-  window.__smartLabelV321 = true;
+  if (window.__smartLabelV33) return;
+  window.__smartLabelV33 = true;
 
   function extract() {
     let prompt = "";
@@ -52,6 +52,41 @@
     return { prompt, urls: responseUrls, count: responseUrls.length, refUrls, refCount: refUrls.length };
   }
 
+  function buildNote(chosenPick, feedbackTa) {
+    let note = (feedbackTa.value || "").trim();
+    if (chosenPick) {
+      note =
+        "The correct choice is " +
+        chosenPick +
+        ". Previous model answer was wrong." +
+        (note ? " Reason: " + note : "");
+    }
+    return note;
+  }
+
+  async function saveLesson(note, lastData, lastResult) {
+    const store = await chrome.storage.local.get("corrections");
+    const list = Array.isArray(store.corrections) ? store.corrections.slice() : [];
+    list.push({
+      feedback: note,
+      promptSnippet: ((lastData && lastData.prompt) || "").slice(0, 180),
+      previousAnswer: (lastResult || "").slice(0, 120),
+      timestamp: Date.now()
+    });
+    const trimmed = list.slice(-40);
+    await chrome.storage.local.set({ corrections: trimmed });
+    try {
+      await chrome.runtime.sendMessage({
+        type: "SAVE_CORRECTION",
+        feedback: note,
+        prompt: (lastData && lastData.prompt) || "",
+        previousAnswer: lastResult || ""
+      });
+    } catch (e) {}
+    const verify = await chrome.storage.local.get("corrections");
+    return (verify.corrections || []).length;
+  }
+
   function ensureUI() {
     if (document.getElementById("sla-root")) return;
 
@@ -94,7 +129,7 @@
         #sla-feedback-box { display: none; margin-top: 12px; padding-top: 10px; border-top: 1px solid #334155; }
         #sla-feedback-box.show { display: block; }
         #sla-feedback {
-          width: 100%; box-sizing: border-box; min-height: 60px;
+          width: 100%; box-sizing: border-box; min-height: 56px;
           background: #0f172a; color: #e5e7eb; border: 1px solid #334155;
           border-radius: 8px; padding: 8px; font-size: 12px; margin: 6px 0;
         }
@@ -104,15 +139,22 @@
           border-radius: 6px; cursor: pointer; font-size: 12px;
         }
         .sla-choice:hover, .sla-choice.active { background: #2563eb; color: #fff; }
-        #sla-reanalyze {
-          background: #2563eb; color: #fff; border: none; border-radius: 6px;
-          padding: 8px 12px; cursor: pointer; font-size: 12px; width: 100%; margin-top: 6px;
+        .sla-row { display: flex; gap: 8px; margin-top: 8px; }
+        #sla-save-only {
+          flex: 1; background: #b45309; color: #fff; border: none; border-radius: 6px;
+          padding: 8px 10px; cursor: pointer; font-size: 12px; font-weight: 600;
         }
+        #sla-reanalyze {
+          flex: 1; background: #2563eb; color: #fff; border: none; border-radius: 6px;
+          padding: 8px 10px; cursor: pointer; font-size: 12px; font-weight: 600;
+        }
+        #sla-save-only:hover { background: #c2410c; }
+        #sla-reanalyze:hover { background: #1d4ed8; }
       </style>
       <button id="sla-btn" type="button">Analyze A/B</button>
       <div id="sla-panel">
         <header>
-          <span>Smart Labeling v3.2</span>
+          <span>Smart Labeling v3.3</span>
           <button id="sla-close" type="button">×</button>
         </header>
         <div id="sla-body">
@@ -122,11 +164,14 @@
           <div id="sla-result">Open a task with Generated image 1 & 2, then click Analyze A/B.</div>
           <div id="sla-status"></div>
           <div id="sla-feedback-box">
-            <div style="font-size:11px;color:#fbbf24;margin-bottom:4px;">Wrong? Teach it for next time</div>
+            <div style="font-size:11px;color:#fbbf24;margin-bottom:4px;">Wrong? Teach it</div>
             <span class="sla-choice" data-pick="Image 1">Correct is Image 1</span>
             <span class="sla-choice" data-pick="Image 2">Correct is Image 2</span>
             <textarea id="sla-feedback" placeholder="Optional: why was it wrong?"></textarea>
-            <button id="sla-reanalyze" type="button">Save correction &amp; re-analyze</button>
+            <div class="sla-row">
+              <button id="sla-save-only" type="button">Save correction only</button>
+              <button id="sla-reanalyze" type="button">Re-analyze now</button>
+            </div>
           </div>
         </div>
       </div>
@@ -141,6 +186,7 @@
     const status = document.getElementById("sla-status");
     const feedbackBox = document.getElementById("sla-feedback-box");
     const feedbackTa = document.getElementById("sla-feedback");
+    const saveOnlyBtn = document.getElementById("sla-save-only");
     const reanalyzeBtn = document.getElementById("sla-reanalyze");
 
     let lastData = null;
@@ -150,7 +196,7 @@
     chrome.storage.local.get(["geminiApiKey", "corrections"]).then((data) => {
       if (data.geminiApiKey) keyInput.value = data.geminiApiKey;
       const n = (data.corrections || []).length;
-      if (n) status.textContent = n + " correction(s) already stored.";
+      if (n) status.textContent = n + " correction(s) stored.";
     });
 
     saveBtn.onclick = () => {
@@ -188,10 +234,13 @@
         }
 
         if (!feedbackText) {
+          const store = await chrome.storage.local.get("corrections");
+          const n = (store.corrections || []).length;
           result.textContent =
             "Response images: " + data.count +
             "\nReference images: " + data.refCount +
-            "\nPrompt:\n" + (data.prompt || "").slice(0, 400) +
+            "\nStored lessons: " + n +
+            "\nPrompt:\n" + (data.prompt || "").slice(0, 350) +
             "\n\nAsking Gemini…";
         }
 
@@ -209,7 +258,7 @@
 
         lastResult = response.result;
         result.textContent = response.result;
-        status.textContent = "You pick the radio. Use correction box if wrong.";
+        status.textContent = "You pick the radio. Save a correction if this was wrong.";
         feedbackBox.classList.add("show");
         chosenPick = null;
         document.querySelectorAll(".sla-choice").forEach((c) => c.classList.remove("active"));
@@ -229,6 +278,20 @@
       await runAnalyze("");
     };
 
+    saveOnlyBtn.onclick = async () => {
+      if (!chosenPick && !feedbackTa.value.trim()) {
+        status.textContent = "Select Image 1 or 2, or write why it was wrong.";
+        return;
+      }
+      if (!lastData) {
+        status.textContent = "Run Analyze first.";
+        return;
+      }
+      const note = buildNote(chosenPick, feedbackTa);
+      const n = await saveLesson(note, lastData, lastResult);
+      status.textContent = "Correction saved (" + n + " total). Next Analyze will use it.";
+    };
+
     reanalyzeBtn.onclick = async () => {
       if (!chosenPick && !feedbackTa.value.trim()) {
         status.textContent = "Select Image 1 or 2, or write why it was wrong.";
@@ -238,41 +301,11 @@
         status.textContent = "Run Analyze first.";
         return;
       }
-
-      let note = feedbackTa.value.trim();
-      if (chosenPick) {
-        note =
-          "The correct choice is " + chosenPick +
-          ". Previous model answer was wrong." +
-          (note ? " Reason: " + note : "");
-      }
-
-      // Save directly in this page (does not depend on service worker)
-      const store = await chrome.storage.local.get("corrections");
-      const list = Array.isArray(store.corrections) ? store.corrections.slice() : [];
-      list.push({
-        feedback: note,
-        promptSnippet: (lastData.prompt || "").slice(0, 180),
-        previousAnswer: (lastResult || "").slice(0, 120),
-        timestamp: Date.now()
-      });
-      const trimmed = list.slice(-40);
-      await chrome.storage.local.set({ corrections: trimmed });
-
-      try {
-        await chrome.runtime.sendMessage({
-          type: "SAVE_CORRECTION",
-          feedback: note,
-          prompt: lastData.prompt || "",
-          previousAnswer: lastResult || ""
-        });
-      } catch (e) {}
-
-      const verify = await chrome.storage.local.get("corrections");
-      const n = (verify.corrections || []).length;
-      status.textContent = "Saved (" + n + " lessons). Re-analyzing…";
+      const note = buildNote(chosenPick, feedbackTa);
+      const n = await saveLesson(note, lastData, lastResult);
+      status.textContent = "Saved (" + n + "). Re-analyzing…";
       await runAnalyze(note);
-      status.textContent = "Correction saved (" + n + " total). Used on future tasks.";
+      status.textContent = "Re-analyzed with correction (" + n + " lessons stored).";
     };
   }
 
