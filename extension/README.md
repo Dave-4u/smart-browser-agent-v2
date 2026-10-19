@@ -1,39 +1,25 @@
-# Smart Labeling Assistant v2
+# Smart Labeling Assistant v3 (simple)
 
-Chrome extension that helps you choose the better of two generated images on preference-labeling sites (Toloka / Mindrift style).
+Floating **Analyze A/B** button on the labeling page. No side panel. No tab hunting.
 
-It extracts the structured prompt + the two response images, sends them to **Gemini vision**, and returns a recommendation following the full decision rules:
+## Install
 
-1. **Quality first** (most noticeable defect)
-2. **Prompt adherence** (weigh noticeable mismatches)
-3. **Beauty / effects** (when blur, soft focus, less texture detail, color overlay are intentional and motivated)
-4. **Edge cases** (UI screens, strong global patterns, clean vs expressive drawing, noise)
+1. `chrome://extensions` → Developer mode → **Load unpacked**
+2. Select this `extension` folder
+3. Open a real task (both Generated image 1 and 2 visible)
+4. Click the blue **Analyze A/B** button (bottom-right)
+5. Paste Gemini API key once → Save key → click Analyze again if needed
 
-**It never clicks Submit or selects a radio for you.** You stay in control.
+## Get a free Gemini key
 
-## Setup
+https://aistudio.google.com/apikey
 
-1. Get a free Gemini API key: https://aistudio.google.com/apikey  
-2. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select this `extension` folder.  
-3. Open the labeling page (already logged in).  
-4. Click the extension icon → side panel opens.  
-5. Paste your API key → **Save**.  
-6. Click **Analyze this page**.
+## Flow
 
-## What changed in v2
+1. Content script extracts prompt + image URLs from the current page
+2. Background fetches images and calls Gemini vision
+3. Result shows in the floating panel — you still choose the radio yourself
 
-- Full updated instruction set (quality → prompt → beauty section + UI / pattern / drawing edge cases).
-- Selectors tuned for the Azure labeling tool (`Generated image 1` / `Generated image 2`, structured object blocks).
-- Still uses Gemini vision (same family as v1); images are fetched and sent as inline data.
-- Correction memory (last ~10 lessons applied to future calls).
-- Clearer side-panel UX and error messages when images cannot be loaded.
+## Version
 
-## Model
-
-Uses `gemini-2.0-flash` (vision). You can change the model string in `background.js` if needed.
-
-## Safety
-
-- No automatic submission.
-- API key stored only in `chrome.storage.local`.
-- Works only on the active tab you choose to analyze.
+3.0.0 — rewritten for speed and reliability
