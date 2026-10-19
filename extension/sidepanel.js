@@ -184,8 +184,23 @@ analyzeBtn.addEventListener("click", async () => {
   analyzeBtn.disabled = true;
 
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.id) throw new Error("No active tab found.");
+    // Prefer a labeling-site tab; fall back to active tab
+    let tab = null;
+    const allTabs = await chrome.tabs.query({ currentWindow: true });
+    const labelTab = allTabs.find(function (t) {
+      return t.url && (
+        t.url.indexOf("azurewebsites.net") !== -1 ||
+        t.url.indexOf("toloka") !== -1 ||
+        t.url.indexOf("label-") !== -1
+      );
+    });
+    if (labelTab) {
+      tab = labelTab;
+    } else {
+      const active = await chrome.tabs.query({ active: true, currentWindow: true });
+      tab = active[0];
+    }
+    if (!tab || !tab.id) throw new Error("No tab found. Open the labeling page first.");
 
     if (
       tab.url &&
@@ -194,8 +209,10 @@ analyzeBtn.addEventListener("click", async () => {
         tab.url.startsWith("about:") ||
         tab.url.startsWith("chrome-extension://"))
     ) {
-      throw new Error("Switch to the labeling website tab first, then click Analyze.");
+      throw new Error("Open the labeling website in a tab, then click Analyze.");
     }
+
+    statusDiv.textContent = "Reading: " + (tab.url || "").slice(0, 60) + "…";
 
     const extractPromise = extractFromTab(tab.id);
     const timeoutPromise = new Promise(function (_, reject) {
