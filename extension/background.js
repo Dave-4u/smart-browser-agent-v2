@@ -1,8 +1,8 @@
-// Background — Gemini + correction memory
+// Background — Gemini + correction memory + reference images
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "ANALYZE") {
-    analyze(message.prompt, message.urls, message.feedback || "")
+    analyze(message.prompt, message.urls, message.feedback || "", message.refUrls || [])
       .then((result) => sendResponse({ success: true, result }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
@@ -62,40 +62,50 @@ async function urlToBase64(url) {
 }
 
 const SYSTEM = `You are an expert image preference labeler.
-Compare Image 1 and Image 2 (attached in that order).
+Compare Image 1 and Image 2 (the two response candidates).
 
 DECISION FLOW:
 1) QUALITY first — most noticeable defect (artifacts, anatomy, broken text, stock-like). Which is less disturbing?
-2) PROMPT ADHERENCE — go line by line through the prompt; weigh noticeable mismatches more.
+2) PROMPT ADHERENCE — go line by line through the prompt; weigh noticeable mismatches more. If reference/style images are provided, judge how well each candidate matches the requested style.
 3) FINAL — if quality ties, prompt decides; if prompt ties, quality decides; if both differ, pick the less disturbing problem for a user of the image.
 
 DEFECTS: oversaturation, blur (unless artistic), compression, watermarks, frames, upscaled look, AI artifacts, wrong anatomy (fingers, proportions), broken text.
 
-BEAUTY: less fine texture detail can win if both textures look realistic. Blur/soft focus/color overlay only if motivated by mood (magical, tender, hazy, dramatic). Otherwise those are defects.
+BEAUTY: less fine texture detail can win if both textures look realistic. Blur/soft focus/color overlay only if motivated by mood. Otherwise those are defects.
 
 EDGE: strong global banding/noise grid is critical. For UI, readable text beats contrast. For drawings, expressive linework can beat flat clean fills.
 
 OUTPUT:
 - Start with exactly "Image 1" or "Image 2" (or "Both" only if truly equal).
-- Brief concrete reasons (defects + key prompt items).
+- Brief concrete reasons (defects + key prompt items + style match if refs given).
 - Do not tell the user to submit.`;
 
-async function analyze(prompt, urls, feedback) {
+async function analyze(prompt, urls, feedback, refUrls) {
   const { geminiApiKey } = await chrome.storage.local.get("geminiApiKey");
   if (!geminiApiKey) {
     throw new Error("Save a Gemini API key first (panel). Free key: aistudio.google.com");
   }
 
   const imageParts = [];
+  let refLoaded = 0;
+  for (const url of (refUrls || []).slice(0, 4)) {
+    const b64 = await urlToBase64(url);
+    if (b64) {
+      imageParts.push({ inline_data: { mime_type: "image/jpeg", data: b64 } });
+      refLoaded++;
+    }
+  }
+  let respLoaded = 0;
   for (const url of urls || []) {
     const b64 = await urlToBase64(url);
     if (b64) {
       imageParts.push({ inline_data: { mime_type: "image/jpeg", data: b64 } });
+      respLoaded++;
     }
   }
-  if (imageParts.length < 2) {
+  if (respLoaded < 2) {
     throw new Error(
-      "Could not load both images (" + imageParts.length + "/2). Wait for images to finish loading."
+      "Could not load both response images (" + respLoaded + "/2). Wait for images to finish loading."
     );
   }
 
@@ -107,16 +117,20 @@ async function analyze(prompt, urls, feedback) {
       pastLessons;
   }
 
-  let userText =
-    "PROMPT:\n" +
-    (prompt || "(none)") +
-    "\n\nImage 1 = first attachment, Image 2 = second attachment.\nWhich is better and why?";
+  let userText = "PROMPT:\n" + (prompt || "(none)") + "\n\n";
+  if (refLoaded > 0) {
+    userText +=
+      "The first " + refLoaded + " attached image(s) are REFERENCE / style hints only (not choices).\n";
+  }
+  userText +=
+    "The last two attached images are the candidates: Image 1 then Image 2.\n" +
+    "Choose which response is better and why.";
 
   if (feedback) {
     userText =
       "IMPORTANT CORRECTION FROM THE USER:\n" +
       feedback +
-      "\n\nRe-examine both images with this correction and the labeling rules. Prefer the image that matches the correction.\n\n" +
+      "\n\nRe-examine both response images with this correction and the labeling rules. Prefer the image that matches the correction.\n\n" +
       userText;
   }
 
